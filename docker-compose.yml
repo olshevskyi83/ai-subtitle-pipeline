@@ -1,0 +1,32 @@
+services:
+  subtitle-pipeline:
+    build: .
+    container_name: ai-subtitle-pipeline
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - /home/homelabuser/RemoteDrop/incoming:/data/incoming
+      - /home/homelabuser/RemoteDrop/processing:/data/processing
+      - /home/homelabuser/RemoteDrop/ready:/data/ready
+      - /home/homelabuser/RemoteDrop/failed:/data/failed
+      - /home/homelabuser/RemoteDrop/logs:/app/logs
+      - ./data/model-cache:/root/.cache/huggingface
+      - /home/homelabuser/RemoteDrop/logs:/data/logs
+    command: python -u app/main.py
+
+  subtitle-uploader:
+    build: .
+    container_name: ai-subtitle-uploader
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - /home/homelabuser/RemoteDrop/incoming:/data/incoming
+      - /home/homelabuser/RemoteDrop/processing:/data/processing
+      - /home/homelabuser/RemoteDrop/ready:/data/ready
+      - /home/homelabuser/RemoteDrop/failed:/data/failed
+      - /home/homelabuser/RemoteDrop/logs:/data/logs
+    command: uvicorn app.uploader:app --host 0.0.0.0 --port 8080
