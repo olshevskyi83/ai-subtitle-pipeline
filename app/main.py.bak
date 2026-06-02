@@ -1,6 +1,5 @@
 import os
 import time
-import json
 import shutil
 import logging
 from pathlib import Path
@@ -26,12 +25,7 @@ SOURCE_LANGUAGE = os.getenv("SOURCE_LANGUAGE", "uk")
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "10"))
 STABLE_SECONDS = int(os.getenv("STABLE_SECONDS", "20"))
 OPENAI_TRANSLATION_MODEL = os.getenv("OPENAI_TRANSLATION_MODEL", "gpt-4.1-mini")
-LANGUAGE_NAMES = {
-    "uk": "Ukrainian",
-    "ru": "Russian",
-    "es": "Spanish",
-    "en": "English",
-}
+
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 
 logging.basicConfig(
@@ -71,12 +65,12 @@ def format_srt_timestamp(seconds: float) -> timedelta:
     return timedelta(seconds=max(0, seconds))
 
 
-def transcribe_to_srt(video_path: Path, output_srt: Path, source_language: str):
-    logging.info(f"Transcribing CapCut-style: {video_path.name} language={source_language}")
+def transcribe_to_srt(video_path: Path, output_srt: Path):
+    logging.info(f"Transcribing CapCut-style: {video_path.name}")
 
     segments, info = model.transcribe(
         str(video_path),
-        language=source_language,
+        language=SOURCE_LANGUAGE,
         beam_size=5,
         vad_filter=True,
         word_timestamps=True,
@@ -146,19 +140,16 @@ def transcribe_to_srt(video_path: Path, output_srt: Path, source_language: str):
     flush()
 
     output_srt.write_text(srt.compose(subtitles), encoding="utf-8")
-    logging.info(f"Created CapCut-style SRT: {output_srt.name}")
+    logging.info(f"Created CapCut-style Ukrainian SRT: {output_srt.name}")
 
-def translate_block(text: str, source_language: str, target_language: str) -> str:
-    source_name = LANGUAGE_NAMES.get(source_language, source_language)
-    target_name = LANGUAGE_NAMES.get(target_language, target_language)
-
+def translate_block(text: str) -> str:
     response = client.responses.create(
         model=OPENAI_TRANSLATION_MODEL,
         input=[
             {
                 "role": "system",
                 "content": (
-                    f"You translate {source_name} subtitles into natural {target_name}. "
+                    "You translate Ukrainian subtitles into natural English. "
                     "Preserve SRT numbering, timestamps, blank lines, and formatting exactly. "
                     "Translate only subtitle text. Do not add comments."
                 ),
@@ -173,48 +164,18 @@ def translate_block(text: str, source_language: str, target_language: str) -> st
     return response.output_text.strip() + "\n"
 
 
-def translate_srt(input_srt: Path, output_srt: Path, source_language: str, target_language: str):
-    logging.info(
-        f"Translating SRT: {input_srt.name} {source_language} -> {target_language}"
-    )
+def translate_srt_uk_to_en(input_srt: Path, output_srt: Path):
+    logging.info(f"Translating SRT to English: {input_srt.name}")
 
     text = input_srt.read_text(encoding="utf-8")
-    translated = translate_block(text, source_language, target_language)
+
+    # Для коротких TikTok/Reels можна одним блоком.
+    # Якщо буде довге відео — пізніше додамо chunking.
+    translated = translate_block(text)
 
     output_srt.write_text(translated, encoding="utf-8")
-    logging.info(f"Created translated SRT: {output_srt.name}")
+    logging.info(f"Created English SRT: {output_srt.name}")
 
-def read_video_metadata(video_path: Path) -> dict:
-    meta_path = video_path.with_suffix(".meta.json")
-
-    default = {
-        "source_language": SOURCE_LANGUAGE,
-        "target_language": "en",
-    }
-
-    if not meta_path.exists():
-        return default
-
-    try:
-        data = json.loads(meta_path.read_text(encoding="utf-8"))
-
-        source_language = data.get("source_language", default["source_language"])
-        target_language = data.get("target_language", default["target_language"])
-
-        if source_language not in {"uk", "ru", "es"}:
-            source_language = default["source_language"]
-
-        if target_language not in {"uk", "ru", "es", "en"}:
-            target_language = default["target_language"]
-
-        return {
-            "source_language": source_language,
-            "target_language": target_language,
-        }
-
-    except Exception as e:
-        logging.warning(f"Could not read metadata {meta_path.name}: {e}")
-        return default
 
 def marker_path(video_path: Path) -> Path:
     return READY_DIR / f"{video_path.stem}.done"
@@ -244,9 +205,7 @@ def process_video(incoming_video: Path):
         return
 
     processing_video = PROCESSING_DIR / incoming_video.name
-    incoming_meta = incoming_video.with_suffix(".meta.json")
-    processing_meta = processing_video.with_suffix(".meta.json")
-    
+
     try:
         write_status(
             STATUS_DIR,
@@ -259,39 +218,28 @@ def process_video(incoming_video: Path):
         shutil.move(str(incoming_video), str(processing_video))
         logging.info(f"Moved to processing: {processing_video.name}")
 
-        if incoming_meta.exists():
-            shutil.move(str(incoming_meta), str(processing_meta))
-            logging.info(f"Moved metadata to processing: {processing_meta.name}")
-
-        metadata = read_video_metadata(processing_video)
-        source_language = metadata["source_language"]
-        target_language = metadata["target_language"]
-
-        source_srt = READY_DIR / f"{processing_video.stem}.{source_language}.srt"
-        target_srt = READY_DIR / f"{processing_video.stem}.{target_language}.srt"
+        uk_srt = READY_DIR / f"{processing_video.stem}.uk.srt"
+        en_srt = READY_DIR / f"{processing_video.stem}.en.srt"
         
         write_status(
             STATUS_DIR,
             processing_video.stem,
             "transcribing",
             35,
-            f"Generating {LANGUAGE_NAMES.get(source_language, source_language)} subtitles."
+            "Generating Ukrainian subtitles."
         )
 
-        transcribe_to_srt(processing_video, source_srt, source_language)
+        transcribe_to_srt(processing_video, uk_srt)
 
-        if source_language != target_language:
-            write_status(
-                STATUS_DIR,
-                processing_video.stem,
-                "translating",
-                70,
-                f"Translating subtitles to {LANGUAGE_NAMES.get(target_language, target_language)}."
-            )
+        write_status(
+            STATUS_DIR,
+            processing_video.stem,
+            "translating",
+            70,
+            "Translating subtitles to English."
+        )
 
-            translate_srt(source_srt, target_srt, source_language, target_language)
-        else:
-            logging.info("Source and target languages are the same. Skipping translation.")
+        translate_srt_uk_to_en(uk_srt, en_srt)
         
         write_status(
             STATUS_DIR,
@@ -309,8 +257,7 @@ def process_video(incoming_video: Path):
         logging.info(f"Done: {processing_video.name}")
 
         processing_video.unlink()
-        if processing_meta.exists():
-            processing_meta.unlink()
+
     except Exception as e:
         logging.exception(f"Failed processing {incoming_video.name}: {e}")
 

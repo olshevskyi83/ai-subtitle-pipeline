@@ -1,5 +1,4 @@
 import os
-import json
 import shutil
 from pathlib import Path
 
@@ -43,7 +42,7 @@ HTML = """
             border-radius: 18px;
         }}
 
-        input, button, select {{
+        input, button {{
             width: 100%;
             padding: 14px;
             margin-top: 14px;
@@ -124,24 +123,8 @@ HTML = """
         <p>Upload video. Server will create Ukrainian and English SRT files.</p>
 
         <form action="/upload" method="post" enctype="multipart/form-data">
-            <label>Speech language:</label>
-            <select name="source_language">
-                <option value="uk" selected>Ukrainian</option>
-                <option value="ru">Russian</option>
-                <option value="es">Spanish</option>
-             </select>
-
-            <label>Translate to:</label>
-            <select name="target_language">
-                <option value="en" selected>English</option>
-                <option value="uk">Ukrainian</option>
-                <option value="ru">Russian</option>
-                <option value="es">Spanish</option>
-            </select>
-
             <input id="video-file" type="file" name="file" accept="video/*" required>
             <div id="file-name" class="muted">No file selected</div>
-
             <button type="submit">Upload video</button>
         </form>
 
@@ -246,40 +229,14 @@ def index():
 
 
 @app.post("/upload")
-def upload(
-    file: UploadFile = File(...),
-    source_language: str = Form("uk"),
-    target_language: str = Form("en"),
-):
+def upload(file: UploadFile = File(...)):
     INCOMING_DIR.mkdir(parents=True, exist_ok=True)
-
-    allowed_source = {"uk", "ru", "es"}
-    allowed_target = {"uk", "ru", "es", "en"}
-
-    if source_language not in allowed_source:
-        source_language = "uk"
-
-    if target_language not in allowed_target:
-        target_language = "en"
 
     safe_name = Path(file.filename).name
     target = INCOMING_DIR / safe_name
 
     with target.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-
-    meta_path = target.with_suffix(".meta.json")
-    meta_path.write_text(
-        json.dumps(
-            {
-                "source_language": source_language,
-                "target_language": target_language,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
 
     return RedirectResponse("/", status_code=303)
 
